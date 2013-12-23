@@ -1,3 +1,12 @@
+/**
+ * This file provides a direct-graph data struct for point-to analysis result
+ * of FlowtoAnalysis. Each node, PTNode in a graph may be pointer or
+ * location. Edge from node A to node B means that the pointer or location
+ * that node A representing may contain a pointer of B.
+ * The pointer or locations a node representing should be checked by
+ * PTNode::getValue() and PTNode::isLocation(). And adjs of a node
+ * are listed in PTNode::next.
+ **/
 #ifndef PTGRAPH_H
 #define PTGRAPH_H
 #include "llvm/IR/Value.h"
@@ -23,15 +32,21 @@ namespace ACT {
 
         inline void print(raw_ostream &OS) {
             if (!isLocation())
-                OS << "("<< this << ")" << "node for " << value << "," << *value ;
+                OS << "("<< this << ")" << "node for " << value << ",";
             else
-                OS << "("<< this << ")" << "location in " << value << "," << *value ;
+                OS << "("<< this << ")" << "location in " << value << ",";
+            if (!isa<Function>(value)) {
+                OS << *value;
+            }
             if (isa<Instruction>(value)) {
                 Instruction* inst = cast<Instruction>(value);
-                OS << " in function "<< inst->getParent()->getParent()->getName();
+                OS  << " in function "<< inst->getParent()->getParent()->getName();
             } else if (isa<Argument>(value)) {
                 Argument *arg = cast<Argument>(value);
-                OS << " in function "<< arg->getParent()->getName();
+                OS  << " in function "<< arg->getParent()->getName();
+            } else if (isa<Function>(value)) {
+                Function *func = cast<Function>(value);
+                OS << " function " << func->getName();
             }
             OS << "\n";
             for (auto nodep : next) {
@@ -57,14 +72,30 @@ namespace ACT {
 
     struct PTGraph {
         std::vector<PTNode*> nodes;
+        /**
+         * Merge another graph, which means adding nodes and edges that
+         * exist in `mergeFrom` in the current graph.
+         **/
         void merge(PTGraph &mergeFrom);
-
+        /**
+         * Add edge for from->to. `from` and `to` should be nodes in this graph
+         * and return true if the edge is not existed before adding.
+         **/
         bool addEdge(PTNode *from, PTNode *to);
-
+        /**
+         * Add node to this graph.
+         * Return a pointer to the added node if the node is not existed before.
+         * NULL otherwise.
+         **/
         PTNode* addNode(Value *v, bool isLocation = false);
-
+        /**
+         * Return node that representing the value as a pointer or location
+         * return NULL if can not find one
+         **/
         PTNode* findValue(Value *v, bool isLocation = false);
-
+        /**
+         * Shortcut function. If can not find, created one and set modified to true
+         **/
         inline PTNode* findOrCreateValue(Value *v, bool isLocation, bool *modified) {
             PTNode *node = findValue(v, isLocation);
             if (node) {
@@ -74,7 +105,9 @@ namespace ACT {
             *modified = true;
             return addNode(v, isLocation);
         }
-
+        /**
+         * Only keep nodes that can be traveled from the given list
+         **/
         void onlyTracking(std::vector<PTNode*>&);
 
         /**
