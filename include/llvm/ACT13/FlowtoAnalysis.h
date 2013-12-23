@@ -23,7 +23,7 @@ namespace ACT {
         virtual void releaseMemory();
         void getAnalysisUsage(AnalysisUsage &AU) const;
         PTGraph *graphForCallSite(const CallSite& CS) ;
-        PTGraph *analyze(Function *func, PTGraph* flowinto);
+        PTNode *analyze(Function *func, PTGraph* flowinto, bool* added = NULL);
         bool runInstruction(PTGraph* graph, Instruction& inst);
     };
 };

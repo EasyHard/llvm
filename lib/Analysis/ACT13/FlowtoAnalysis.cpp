@@ -21,6 +21,25 @@ namespace ACT {
     void FlowtoAnalysis::releaseMemory() {
     }
 
+
+    void setupArguments(const CallSite *CS, PTGraph* graph) {
+        Function *callee = CS->getCalledFunction();
+        errs() << "setupArgument for func:" << callee->getName() << "\n";
+        for (auto& arg : callee->getArgumentList()) {
+            if (arg.getType()->isPointerTy()) {
+                // need to setup the graph for it.
+                errs() << "argnode value: " << arg << ", oldnode value: " << *CS->getArgument(arg.getArgNo()) << "\n";
+                PTNode* argnode = graph->addNode(&arg);
+                PTNode* oldnode = graph->findValue(CS->getArgument(arg.getArgNo()));
+                assert(argnode);
+                assert(oldnode);
+                for (auto node : oldnode->next) {
+                    graph->addEdge(argnode, node);
+                }
+            }
+        }
+    }
+
     /**
      * Generate the flowinto graph for a Callsite.
      * For arguments of the function that the CallSite callinto.
@@ -40,27 +59,30 @@ namespace ACT {
         // Function which is called.
         Function *callee = CS.getCalledFunction();
         // setup arguments for callee
-        //setupArguments(&CS, result);
+        setupArguments(&CS, result);
         std::vector<PTNode*> trackingList;
         for (auto& arg : callee->getArgumentList()) {
             if (arg.getType()->isPointerTy()) {
                 // need to setup the graph for it.
-                PTNode* argnode = result->addNode(&arg);
-                PTNode* oldnode = result->findValue(CS.getArgument(arg.getArgNo()));
-                for (auto node : oldnode->next) {
-                    result->addEdge(argnode, node);
-                }
+                PTNode* argnode = result->findValue(&arg);
+                assert(argnode && "argnode shoule have been created");
                 trackingList.push_back(argnode);
             }
+        }
+        for (auto nodep : result->nodes) {
+            if (isa<GlobalValue>(nodep->getValue()))
+                trackingList.push_back(nodep);
         }
         result->onlyTracking(trackingList);
         return result;
     }
 
     /**
-     * Generate to PTGraph on the flowinto graph
+     * Generate to PTGraph on the flowinto graph.
+     * Return value: PTGraph node of the ret value.
      **/
-    PTGraph *FlowtoAnalysis::analyze(Function* function, PTGraph* flowinto) {
+    PTNode *FlowtoAnalysis::analyze(Function* function, PTGraph* flowinto, bool *added) {
+        if (added) *added = false;
         std::deque<BasicBlock*> workingList;
         workingList.push_back(&function->getEntryBlock());
         while (!workingList.empty()) {
@@ -71,13 +93,28 @@ namespace ACT {
                 modified |= runInstruction(flowinto, inst);
             }
             if (modified) {
+                if (added) *added = true;
                 TerminatorInst* tinst = BB->getTerminator();
                 for (unsigned i = 0; i < tinst->getNumSuccessors(); i++) {
                     workingList.push_back(tinst->getSuccessor(i));
                 }
             }
         }
-        return flowinto;
+        for (auto &BB : *function) {
+            for (auto &inst : BB) {
+                if (isa<ReturnInst>(&inst)) {
+                    ReturnInst* retInst = cast<ReturnInst>(&inst);
+                    Value *v = retInst->getReturnValue();
+                    if (v && v->getType()->isPointerTy()) {
+                        errs() << "returning value" << *v << "\n";
+                        PTNode* retNode = flowinto->findValue(v);
+                        assert(retNode && "retNode should have been created");
+                        return retNode;
+                    }
+                }
+            }
+        }
+        return NULL;
     }
 
     /**
@@ -89,15 +126,16 @@ namespace ACT {
         bool added;
         AllocaInst* allocainst = dyn_cast<AllocaInst>(&inst);
         CallSite CS(&inst);
-        if (allocainst || (CS && CS.getCalledFunction()->getName() == "malloc")) {
-            PTNode *v = graph->findOrCreateValue(&inst, false, &added);
+        if (allocainst || (!!CS && CS.getCalledFunction()->getName() == "malloc")) {
+            // just added, addNode will create the location node for us.
+            graph->findOrCreateValue(&inst, false, &added);
             modified |= added;
-            PTNode *location = graph->addNode(&inst, true);
+            // PTNode *location = graph->addNode(&inst, true);
 
-            modified |= (location != NULL);
-            if (!location)
-                location = graph->findValue(&inst, true);
-            modified |= graph->addEdge(v, location);
+            // modified |= (location != NULL);
+            // if (!location)
+            //     location = graph->findValue(&inst, true);
+            // modified |= graph->addEdge(v, location);
             return modified;
         }
 
@@ -141,9 +179,32 @@ namespace ACT {
                 callee->getName() == "pthread_mutex_lock" ||
                 callee->getName() == "pthread_mutex_unlock")
                 return false;
+            // add each arguments in case
+            for (unsigned i = 0; i < CS.arg_size(); i++) {
+                errs() << "creating node for" << *CS.getArgument(i) << "\n";
+                modified |= graph->addNode(CS.getArgument(i)) != NULL;
+            }
             std::vector<PTNode*> trackingList(graph->nodes);
             // prepare the graph for callee.
-            
+            setupArguments(&CS, graph);
+            PTNode* retNode = analyze(callee, graph, &added);
+            modified |= added;
+            PTNode* vnode = graph->findOrCreateValue(&inst, false, &added);
+            modified |= added;
+            if (inst.getType()->isPointerTy() && retNode)
+                for (auto retNodeadj : retNode->next)
+                    modified |= graph->addEdge(vnode, retNodeadj);
+            if (std::find(trackingList.begin(), trackingList.end(), vnode) == trackingList.end())
+                trackingList.push_back(vnode);
+            graph->onlyTracking(trackingList);
+            return modified;
+        }
+
+        if (isa<ReturnInst>(&inst)) {
+            ReturnInst* retInst = cast<ReturnInst>(&inst);
+            Value *v = retInst->getReturnValue();
+            PTNode *vnode = graph->addNode(v);
+            return vnode != NULL;
         }
 
         if (!inst.getType()->isPointerTy()) {
@@ -201,14 +262,14 @@ namespace ACT {
                             assert(CS && "This should be a callsite");
                             errs() << "called by callsite: " << csrecord.first << "from function:" << CS->getCaller()->getName();
                             PTGraph* flowinto = graphForCallSite(*CS);
-                            PTGraph* result = analyze(funcp, flowinto);
-                            c2g.insert(std::make_pair(CS, result));
+                            analyze(funcp, flowinto);
+                            c2g.insert(std::make_pair(CS, flowinto));
                         }
                     }
                 }
                 if (funcp->getName() == "main") {
                     PTGraph* flowinto = new PTGraph();
-                    flowinto = analyze(funcp, flowinto);
+                    analyze(funcp, flowinto);
                     c2g.insert(std::make_pair((CallSite*)NULL, flowinto));
                     flowinto->print(errs());
                 }

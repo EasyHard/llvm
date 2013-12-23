@@ -1,5 +1,7 @@
 #include "llvm/ACT13/PTGraph.h"
 #include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/Function.h"
+#include "llvm/Support/CallSite.h"
 #include <algorithm>
 namespace ACT {
     void PTGraph::merge(PTGraph& from) {
@@ -32,9 +34,11 @@ namespace ACT {
         if (node) return NULL;
         node = new PTNode(v, isLocation);
         nodes.push_back(node);
-        // GlobalValue always is pointer and placeholder
-        // add it for safe.
-        if (isa<GlobalValue>(v)) {
+        // GlobalValue, AllocaInst, malloc always is
+        // pointer and placeholder.
+        CallSite CS(v);
+        bool isMalloc = (!!CS) && CS.getCalledFunction()->getName() == "malloc";
+        if (isa<GlobalValue>(v) || isa<AllocaInst>(v) || isMalloc) {
             PTNode* pnode = new PTNode(v, !isLocation);
             nodes.push_back(pnode);
             if (!isLocation)
