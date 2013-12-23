@@ -1,6 +1,10 @@
 #ifndef PTGRAPH_H
 #define PTGRAPH_H
 #include "llvm/IR/Value.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Argument.h"
 #include <vector>
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
@@ -19,9 +23,17 @@ namespace ACT {
 
         inline void print(raw_ostream &OS) {
             if (!isLocation())
-                OS << "("<< this << ")" << "node for " << value << "," << *value << "\n";
+                OS << "("<< this << ")" << "node for " << value << "," << *value ;
             else
-                OS << "("<< this << ")" << "location in " << value << "," << *value << "\n";
+                OS << "("<< this << ")" << "location in " << value << "," << *value ;
+            if (isa<Instruction>(value)) {
+                Instruction* inst = cast<Instruction>(value);
+                OS << " in function "<< inst->getParent()->getParent()->getName();
+            } else if (isa<Argument>(value)) {
+                Argument *arg = cast<Argument>(value);
+                OS << " in function "<< arg->getParent()->getName();
+            }
+            OS << "\n";
             for (auto nodep : next) {
                 OS << nodep;
                 if (nodep->isLocation())
@@ -33,6 +45,13 @@ namespace ACT {
 
         inline bool isLocation() const {
             return location;
+        }
+
+        /**
+         * Check if is identical to another node.
+         **/
+        inline bool identicalTo(const PTNode *node) const {
+            return getValue() == node->getValue() && isLocation() == node->isLocation();
         }
     };
 
@@ -57,6 +76,22 @@ namespace ACT {
         }
 
         void onlyTracking(std::vector<PTNode*>&);
+
+        /**
+         * Clone a new grpah that the same as it, but with seperate memory.
+         **/
+        PTGraph *clone() const;
+
+        /**
+         * Clear the graph and release all memory of nodes.
+         **/
+        void clear();
+
+        /**
+         * Check if is identical to the other graph. i.e. same node and
+         * same edge.
+         **/
+        bool identicalTo(const PTGraph* graph) const;
 
         inline void print(raw_ostream& OS) {
             OS << "graph has " << nodes.size() << "nodes\n";

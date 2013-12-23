@@ -24,6 +24,7 @@ namespace ACT {
         void getAnalysisUsage(AnalysisUsage &AU) const;
         PTGraph *graphForCallSite(const CallSite& CS) ;
         PTNode *analyze(Function *func, PTGraph* flowinto, bool* added = NULL);
+        void cleanupForFunc(Function *funcp, PTGraph *flowinto);
         bool runInstruction(PTGraph* graph, Instruction& inst);
     };
 };

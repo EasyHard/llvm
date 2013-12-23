@@ -17,7 +17,9 @@ namespace ACT {
             PTNode* mynode = findValue(theirnode->getValue(), theirnode->isLocation());
             assert(mynode && "all missed nodes should be created");
             for (auto neiberhood : theirnode->next) {
-                addEdge(mynode, findValue(neiberhood->getValue(), theirnode->isLocation()));
+                //errs() << "mynode: " << *mynode << "\n";
+                //errs() << "neiberhood: " << *neiberhood << "\n";
+                addEdge(mynode, findValue(neiberhood->getValue(), neiberhood->isLocation()));
             }
         }
     }
@@ -49,14 +51,51 @@ namespace ACT {
         return node;
     }
 
-    // bool PTGraph::addEdge(Value *from, Value *to) {
-    //     PTNode* fromNode = findValue(from);
-    //     PTNode* toNode = findValue(to);
-    //     assert( fromNode && toNode && "Values should be created in this graph");
-    //     return addEdge(fromNode, toNode);
-    // }
+    PTGraph *PTGraph::clone() const {
+        // clone nodes
+        PTGraph *result = new PTGraph();
+        for (auto nodep : nodes) {
+            result->addNode(nodep->getValue(), nodep->isLocation());
+        }
+        // clone edges
+        for (auto nodep : nodes) {
+            PTNode* anodep = result->findValue(nodep->getValue(), nodep->isLocation());
+            for (auto nodepadj : nodep->next) {
+                PTNode* anodepadj = result->findValue(nodepadj->getValue(), nodepadj->isLocation());
+                assert(anodep && anodepadj && "all nodes should be created");
+                result->addEdge(anodep, anodepadj);
+            }
+        }
+        return result;
+    }
+
+    void PTGraph::clear() {
+        for (auto nodep : nodes)
+            delete nodep;
+        nodes.clear();
+    }
+
+    bool PTGraph::identicalTo(const PTGraph *x) const {
+        for (auto nodep : nodes) {
+            auto it = std::find_if(x->nodes.begin(), x->nodes.end(), [&](const PTNode* anodep) {
+                    return anodep->identicalTo(nodep);
+                });
+            if (it == x->nodes.end())
+                return false;
+            PTNode *anodep = *it;
+            for (auto adjp : nodep->next) {
+                auto adjit = std::find_if(anodep->next.begin(), anodep->next.end(), [&](const PTNode* aadjp) {
+                        return aadjp->identicalTo(adjp);
+                    });
+                if (adjit == anodep->next.end())
+                    return false;
+            }
+        }
+        return true;
+    }
 
     bool PTGraph::addEdge(PTNode *from, PTNode* to) {
+        assert(!(from->getValue()->getName() == "count1" && to->getValue()->getName() == "count1" && !from->isLocation() && !to->isLocation()));
         assert(std::find(nodes.begin(), nodes.end(), from) != nodes.end() && "fromnodes should be in this graph");
         assert(std::find(nodes.begin(), nodes.end(), to) != nodes.end() && "tonodes should be in this graph");
         if (std::find(from->next.begin(), from->next.end(), to) == from->next.end()) {
@@ -66,17 +105,9 @@ namespace ACT {
         return false;
     }
 
-    // void PTGraph::onlyTracking(std::vector<Value*> values) {
-    //     std::vector<PTNode*> trackNodes;
-    //     std::for_each(values.begin(), values.end(), [&](Value* v) {
-    //             PTNode* node = this->findValue(v);
-    //             assert(node && "value should be created");
-    //             trackNodes.push_back(node);
-    //         });
-    //     onlyTracking(trackNodes);
-    // }
-
     void PTGraph::onlyTracking(std::vector<PTNode*>& trackNodes) {
+        errs() << "before onlyTracking, size = " << nodes.size() << "\n";
+
         std::vector<PTNode*> workingList(trackNodes), markedList;
         while (!workingList.empty()) {
             PTNode* node = workingList.back();
@@ -90,14 +121,15 @@ namespace ACT {
                 workingList.push_back(neib);
             }
         }
-        std::remove_if(nodes.begin(), nodes.end(), [markedList](const PTNode* node)->bool {
+        nodes.erase(std::remove_if(nodes.begin(), nodes.end(), [markedList](const PTNode* node)->bool {
                 return std::find(markedList.begin(), markedList.end(), node) == markedList.end();
-            });
+                }), nodes.end());
         for (auto nodep : nodes) {
-            std::remove_if(nodep->next.begin(), nodep->next.end(), [markedList](const PTNode* node)->bool {
+            nodep->next.erase(std::remove_if(nodep->next.begin(), nodep->next.end(), [markedList](const PTNode* node)->bool {
                     return std::find(markedList.begin(), markedList.end(), node) == markedList.end();
-                });
+                    }), nodep->next.end());
         }
+        errs() << "after onlyTracking, size = " << nodes.size() << "\n";
     }
 };
 

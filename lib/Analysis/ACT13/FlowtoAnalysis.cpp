@@ -21,10 +21,11 @@ namespace ACT {
     void FlowtoAnalysis::releaseMemory() {
     }
 
-
+    static std::vector<Function*> visitedFunc;
     void setupArguments(const CallSite *CS, PTGraph* graph) {
         Function *callee = CS->getCalledFunction();
         errs() << "setupArgument for func:" << callee->getName() << "\n";
+        errs() << "setupArgument graph:\n"; graph->print(errs());
         for (auto& arg : callee->getArgumentList()) {
             if (arg.getType()->isPointerTy()) {
                 // need to setup the graph for it.
@@ -46,10 +47,13 @@ namespace ACT {
      **/
     PTGraph* FlowtoAnalysis::graphForCallSite(const CallSite& CS) {
         Function* caller = CS.getCaller();
+        // errs() << "graphForCallSite from caller: " << caller->getName() << "\n";
         // merge all context for the caller
         std::vector<PTGraph*> mergeList;
         for (auto& c : c2g) {
-            if (c.first->getCalledFunction() == caller)
+            if (c.first && c.first->getCalledFunction() == caller)
+                mergeList.push_back(c.second);
+            if (caller->getName() == "main" && c.first == NULL)
                 mergeList.push_back(c.second);
         }
         PTGraph *result = new PTGraph();
@@ -58,6 +62,7 @@ namespace ACT {
         }
         // Function which is called.
         Function *callee = CS.getCalledFunction();
+
         // setup arguments for callee
         setupArguments(&CS, result);
         std::vector<PTNode*> trackingList;
@@ -82,21 +87,39 @@ namespace ACT {
      * Return value: PTGraph node of the ret value.
      **/
     PTNode *FlowtoAnalysis::analyze(Function* function, PTGraph* flowinto, bool *added) {
+        // drop cycle.
+        if (std::find(visitedFunc.begin(), visitedFunc.end(), function) != visitedFunc.end())
+            return NULL;
+        visitedFunc.push_back(function);
         if (added) *added = false;
+        if (function->empty()) return NULL;
         std::deque<BasicBlock*> workingList;
+        std::vector<BasicBlock*> unvisited;
+        for (auto& BB : *function) {
+            unvisited.push_back(&BB);
+        }
+
         workingList.push_back(&function->getEntryBlock());
         while (!workingList.empty()) {
             bool modified = false;
             BasicBlock* BB = workingList.front();
+            unvisited.erase(std::remove(unvisited.begin(), unvisited.end(), BB), unvisited.end());
             workingList.pop_front();
+            //errs() << "working on BB: " << *BB << "\n";
             for (auto& inst : *BB) {
-                modified |= runInstruction(flowinto, inst);
+                bool newmod = runInstruction(flowinto, inst);
+                modified |= newmod;
+                if (newmod) {
+                    errs() << "runInst modified " << inst << "\n";
+                }
             }
-            if (modified) {
-                if (added) *added = true;
-                TerminatorInst* tinst = BB->getTerminator();
-                for (unsigned i = 0; i < tinst->getNumSuccessors(); i++) {
-                    workingList.push_back(tinst->getSuccessor(i));
+            TerminatorInst* tinst = BB->getTerminator();
+            for (unsigned i = 0; i < tinst->getNumSuccessors(); i++) {
+                BasicBlock* succBB = tinst->getSuccessor(i);
+                if (modified)
+                    if (added) *added = true;
+                if (modified || std::find(unvisited.begin(), unvisited.end(), succBB) != unvisited.end()) {
+                    workingList.push_back(succBB);
                 }
             }
         }
@@ -106,7 +129,7 @@ namespace ACT {
                     ReturnInst* retInst = cast<ReturnInst>(&inst);
                     Value *v = retInst->getReturnValue();
                     if (v && v->getType()->isPointerTy()) {
-                        errs() << "returning value" << *v << "\n";
+                        // errs() << "returning value" << *v << "\n";
                         PTNode* retNode = flowinto->findValue(v);
                         assert(retNode && "retNode should have been created");
                         return retNode;
@@ -143,14 +166,25 @@ namespace ACT {
         if (loadinst) {
             PTNode *v = graph->findOrCreateValue(&inst, false, &added);
             modified |= added;
-            errs() << "operands for load:" << loadinst << "\n";
+            if (added)
+                errs() << "loadinst added after findOrCreateValue for v\n";
             Value *op = loadinst->getOperand(0);
-            errs() << *op << "\n";
+            //errs() << "operands for load:" << loadinst << "\n";
+            //errs() << *op << "\n";
             PTNode* loadop = graph->findOrCreateValue(op, false, &added);
             modified |= added;
+            if (added)
+                errs() << "loadinst added after findOrCreateValue for op\n";
             for (auto nodep : loadop->next) {
-                for (auto nodepp : nodep->next)
-                    modified |= graph->addEdge(v, nodepp);
+                for (auto nodepp : nodep->next) {
+                    bool newmod = graph->addEdge(v, nodepp);
+                    modified |= newmod;
+                    if (newmod) {
+                        errs() << "modified on addedge for two nodes: \n";
+                        v->print(errs());
+                        nodepp->print(errs());
+                    }
+                }
             }
             return modified;
         }
@@ -174,35 +208,58 @@ namespace ACT {
         }
 
         if (!!CS) {
+            errs() << "handling call: " << CS.getCalledFunction()->getName() << "\n";
+            //graph->print(errs());
+            //errs() << "^^^^^^^^^^^\n";
+            // add each arguments in case
+            for (unsigned i = 0; i < CS.arg_size(); i++) {
+                //errs() << "creating node for" << *CS.getArgument(i) << "\n";
+                modified |= graph->addNode(CS.getArgument(i)) != NULL;
+            }
+            errs() << "modified after addNode: " << modified << "\n";
             Function* callee = CS.getCalledFunction();
             if (callee->getName() == "pthread_mutex_init" ||
                 callee->getName() == "pthread_mutex_lock" ||
                 callee->getName() == "pthread_mutex_unlock")
                 return false;
-            // add each arguments in case
-            for (unsigned i = 0; i < CS.arg_size(); i++) {
-                errs() << "creating node for" << *CS.getArgument(i) << "\n";
-                modified |= graph->addNode(CS.getArgument(i)) != NULL;
-            }
-            std::vector<PTNode*> trackingList(graph->nodes);
+            // clone a graph to subprocess analyze
+            PTGraph *newgraph = graph->clone();
+            std::vector<PTNode*> trackingList(newgraph->nodes);
+            errs() << "newgraph before setup and analyze::\n";
+            newgraph->print(errs());
             // prepare the graph for callee.
-            setupArguments(&CS, graph);
-            PTNode* retNode = analyze(callee, graph, &added);
-            modified |= added;
-            PTNode* vnode = graph->findOrCreateValue(&inst, false, &added);
+            setupArguments(&CS, newgraph);
+            PTNode* retNode = analyze(callee, newgraph, &added);
+            //modified |= added;
+            //errs() << "modified after analyze: " << modified << "\n";
+            PTNode* vnode = newgraph->findOrCreateValue(&inst, false, &added);
             modified |= added;
             if (inst.getType()->isPointerTy() && retNode)
                 for (auto retNodeadj : retNode->next)
-                    modified |= graph->addEdge(vnode, retNodeadj);
+                    modified |= newgraph->addEdge(vnode, retNodeadj);
+            if (modified)
+                errs() << "modified after retnode\n";
             if (std::find(trackingList.begin(), trackingList.end(), vnode) == trackingList.end())
                 trackingList.push_back(vnode);
-            graph->onlyTracking(trackingList);
+
+            newgraph->onlyTracking(trackingList);
+            bool identical = newgraph->identicalTo(graph);
+            modified |= !identical;
+            errs() << "identical: " << identical << "\n";
+            errs() << "modified: " << modified << "\n";
+            if (modified)
+                graph->merge(*newgraph);
+            errs() << "graph after analyze call\n";
+            graph->print(errs());
+            newgraph->clear();
+            delete newgraph;
             return modified;
         }
 
         if (isa<ReturnInst>(&inst)) {
             ReturnInst* retInst = cast<ReturnInst>(&inst);
             Value *v = retInst->getReturnValue();
+            if (!v) return false;
             PTNode *vnode = graph->addNode(v);
             return vnode != NULL;
         }
@@ -231,6 +288,22 @@ namespace ACT {
         }
         return false;
     }
+    void FlowtoAnalysis::cleanupForFunc(Function *funcp, PTGraph *flowinto) {
+        std::vector<PTNode*> track;
+        for (auto nodep : flowinto->nodes) {
+            if (isa<Instruction>(nodep->getValue())) {
+                Instruction* inst = cast<Instruction>(nodep->getValue());
+                if (inst->getParent()->getParent() != funcp)
+                    continue;
+            } else if (isa<Argument>(nodep->getValue())) {
+                Argument *arg = cast<Argument>(nodep->getValue());
+                if (arg->getParent() != funcp)
+                    continue;
+            }
+            track.push_back(nodep);
+        }
+        flowinto->onlyTracking(track);
+    }
 
     bool FlowtoAnalysis::runOnModule(Module &M) {
         CallGraph &CG = getAnalysis<CallGraph>();
@@ -246,35 +319,47 @@ namespace ACT {
             }
             if (!hasPointer) working_list.push_back(&func);
         }
-        errs() << "first working list:\n";
-        for (auto funcp : working_list) {
-            errs() << funcp->getName() << ", ";
-        }
-        errs() << "\n";
         while (!working_list.empty()) {
-            for (auto funcp : working_list) {
-                // find all its callsites
-                for (auto worked_funcp : worked_list) {
-                    auto cgnodep = CG[worked_funcp];
-                    for (auto csrecord : *cgnodep) {
-                        if (csrecord.second->getFunction() == funcp) {
-                            auto *CS = new CallSite(csrecord.first);
-                            assert(CS && "This should be a callsite");
-                            errs() << "called by callsite: " << csrecord.first << "from function:" << CS->getCaller()->getName();
-                            PTGraph* flowinto = graphForCallSite(*CS);
-                            analyze(funcp, flowinto);
-                            c2g.insert(std::make_pair(CS, flowinto));
-                        }
+            auto funcp = working_list.back();
+            working_list.pop_back();
+            if (funcp->empty()) continue;
+            errs() << "Working on: " << funcp->getName() << "\n";
+            // find all its callsites
+            for (auto worked_funcp : worked_list) {
+                auto cgnodep = CG[worked_funcp];
+                for (auto csrecord : *cgnodep) {
+                    if (csrecord.second->getFunction() == funcp) {
+                        auto *CS = new CallSite(csrecord.first);
+                        assert(!!(*CS) && "This should be a callsite");
+                        errs() << "called by callsite: " << csrecord.first << "from function:" << CS->getCaller()->getName() << "\n";
+                        PTGraph* flowinto = graphForCallSite(*CS);
+                        visitedFunc.clear();
+                        analyze(funcp, flowinto);
+                        c2g.insert(std::make_pair(CS, flowinto));
+                        errs() << "called by callsite: " << csrecord.first << "from function:" << CS->getCaller()->getName() << "\n";
+                        errs() << "result graph:\n";
+                        flowinto->print(errs());
                     }
                 }
-                if (funcp->getName() == "main") {
-                    PTGraph* flowinto = new PTGraph();
-                    analyze(funcp, flowinto);
-                    c2g.insert(std::make_pair((CallSite*)NULL, flowinto));
-                    flowinto->print(errs());
-                }
             }
-            break;
+            if (funcp->getName() == "main") {
+                PTGraph* flowinto = new PTGraph();
+                visitedFunc.clear();
+                analyze(funcp, flowinto);
+                cleanupForFunc(funcp, flowinto);
+                c2g.insert(std::make_pair((CallSite*)NULL, flowinto));
+                flowinto->print(errs());
+            }
+            worked_list.push_back(funcp);
+            auto cgnodep = CG[funcp];
+            for (auto csrecord : *cgnodep) {
+                CallSite CS(csrecord.first);
+                Function *callee = CS.getCalledFunction();
+                if (std::find(worked_list.begin(), worked_list.end(), callee) == worked_list.end() &&
+                    std::find(working_list.begin(), working_list.end(), callee) == working_list.end() &&
+                    !callee->empty())
+                    working_list.push_back(callee);
+            }
         }
         // while (modified) {
         //     modified = false;
