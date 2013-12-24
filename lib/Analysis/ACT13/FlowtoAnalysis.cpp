@@ -9,7 +9,7 @@
 #include <deque>
 
 #include "llvm/ACT13/FlowtoAnalysis.h"
-
+#include "llvm/ACT13/ReplaceFunc.h"
 
 using namespace llvm;
 
@@ -24,8 +24,8 @@ namespace ACT {
     static std::vector<Function*> visitedFunc;
     void setupArguments(const CallSite *CS, PTGraph* graph) {
         Function *callee = CS->getCalledFunction();
-        errs() << "setupArgument for func:" << callee->getName() << "\n";
-        errs() << "setupArgument graph:\n"; graph->print(errs());
+        // errs() << "setupArgument for func:" << callee->getName() << "\n";
+        // errs() << "setupArgument graph:\n"; graph->print(errs());
         for (auto& arg : callee->getArgumentList()) {
             if (arg.getType()->isPointerTy()) {
                 // need to setup the graph for it.
@@ -109,9 +109,9 @@ namespace ACT {
             for (auto& inst : *BB) {
                 bool newmod = runInstruction(flowinto, inst);
                 modified |= newmod;
-                if (newmod) {
-                    errs() << "runInst modified " << inst << "\n";
-                }
+                // if (newmod) {
+                //     errs() << "runInst modified " << inst << "\n";
+                // }
             }
             TerminatorInst* tinst = BB->getTerminator();
             for (unsigned i = 0; i < tinst->getNumSuccessors(); i++) {
@@ -166,24 +166,24 @@ namespace ACT {
         if (loadinst) {
             PTNode *v = graph->findOrCreateValue(&inst, false, &added);
             modified |= added;
-            if (added)
-                errs() << "loadinst added after findOrCreateValue for v\n";
+            // if (added)
+            //     errs() << "loadinst added after findOrCreateValue for v\n";
             Value *op = loadinst->getOperand(0);
             //errs() << "operands for load:" << loadinst << "\n";
             //errs() << *op << "\n";
             PTNode* loadop = graph->findOrCreateValue(op, false, &added);
             modified |= added;
-            if (added)
-                errs() << "loadinst added after findOrCreateValue for op\n";
+            // if (added)
+            //     errs() << "loadinst added after findOrCreateValue for op\n";
             for (auto nodep : loadop->next) {
                 for (auto nodepp : nodep->next) {
                     bool newmod = graph->addEdge(v, nodepp);
                     modified |= newmod;
-                    if (newmod) {
-                        errs() << "modified on addedge for two nodes: \n";
-                        v->print(errs());
-                        nodepp->print(errs());
-                    }
+                    // if (newmod) {
+                    //     errs() << "modified on addedge for two nodes: \n";
+                    //     v->print(errs());
+                    //     nodepp->print(errs());
+                    // }
                 }
             }
             return modified;
@@ -216,7 +216,7 @@ namespace ACT {
                 //errs() << "creating node for" << *CS.getArgument(i) << "\n";
                 modified |= graph->addNode(CS.getArgument(i)) != NULL;
             }
-            errs() << "modified after addNode: " << modified << "\n";
+            // errs() << "modified after addNode: " << modified << "\n";
             Function* callee = CS.getCalledFunction();
             if (callee->getName() == "pthread_mutex_init" ||
                 callee->getName() == "pthread_mutex_lock" ||
@@ -225,8 +225,8 @@ namespace ACT {
             // clone a graph to subprocess analyze
             PTGraph *newgraph = graph->clone();
             std::vector<PTNode*> trackingList(newgraph->nodes);
-            errs() << "newgraph before setup and analyze::\n";
-            newgraph->print(errs());
+            // errs() << "newgraph before setup and analyze::\n";
+            // newgraph->print(errs());
             // prepare the graph for callee.
             setupArguments(&CS, newgraph);
             PTNode* retNode = analyze(callee, newgraph, &added);
@@ -237,20 +237,20 @@ namespace ACT {
             if (inst.getType()->isPointerTy() && retNode)
                 for (auto retNodeadj : retNode->next)
                     modified |= newgraph->addEdge(vnode, retNodeadj);
-            if (modified)
-                errs() << "modified after retnode\n";
+            // if (modified)
+            //     errs() << "modified after retnode\n";
             if (std::find(trackingList.begin(), trackingList.end(), vnode) == trackingList.end())
                 trackingList.push_back(vnode);
 
             newgraph->onlyTracking(trackingList);
             bool identical = newgraph->identicalTo(graph);
             modified |= !identical;
-            errs() << "identical: " << identical << "\n";
-            errs() << "modified: " << modified << "\n";
+            // errs() << "identical: " << identical << "\n";
+            // errs() << "modified: " << modified << "\n";
             if (modified)
                 graph->merge(*newgraph);
-            errs() << "graph after analyze call\n";
-            graph->print(errs());
+            // errs() << "graph after analyze call\n";
+            // graph->print(errs());
             newgraph->clear();
             delete newgraph;
             return modified;
@@ -288,6 +288,10 @@ namespace ACT {
         }
         return false;
     }
+
+    /**
+     * Cleanup the untrack nodes from PTGraph
+     **/
     void FlowtoAnalysis::cleanupForFunc(Function *funcp, PTGraph *flowinto) {
         std::vector<PTNode*> track;
         for (auto nodep : flowinto->nodes) {
@@ -307,6 +311,8 @@ namespace ACT {
 
     bool FlowtoAnalysis::runOnModule(Module &M) {
         CallGraph &CG = getAnalysis<CallGraph>();
+        errs() << "CG print:::::\n";
+        CG.print(errs(), &M);
         std::vector<Function*> working_list, worked_list;
         for (auto& func : M) {
             auto args = func.getFunctionType();
@@ -361,17 +367,28 @@ namespace ACT {
                     working_list.push_back(callee);
             }
         }
-        // while (modified) {
-        //     modified = false;
-        //     for (auto& func : M) {
-        //         errs() << "looking into: " << func.getName() << "\n";
-        //     }
-        // }
+
+        // create a context-insensitive result for each function
+        for (auto& func : M) {
+            if (func.empty()) continue;
+            PTGraph *graph = new PTGraph();
+            for (auto pr : c2g) {
+                CallSite* CS = pr.first;
+                PTGraph *CSGraph = pr.second;
+                if ((CS && CS->getCalledFunction() == &func) || (CS == NULL && func.getName() == "main")) {
+                    graph->merge(*CSGraph);
+                }
+            }
+            f2g.insert(std::make_pair(&func, graph));
+            errs() << "Merge Graph for function " << func.getName() << "\n";
+            graph->print(errs());
+        }
         return false;
     }
 
     // We don't modify the program, so we preserve all analyses
     void FlowtoAnalysis::getAnalysisUsage(AnalysisUsage &AU) const {
+        AU.addRequired<ReplaceFunc>();
         AU.addRequired<CallGraph>();
         AU.setPreservesAll();
     }
