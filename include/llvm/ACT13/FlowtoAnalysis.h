@@ -1,3 +1,15 @@
+/**
+ * A context-sensitive, flow-insensitive point-to analysis,
+ * which will analyze pointers that are used in one
+ * function may point-to heap, stack locations, even the stack locations
+ * are not in this function's.
+ * It provides some kind of context-sensitive result. By the C2GMap, refer
+ * to below comments. For context-insensitive users, check `f2g`.
+ *
+ * Please notes that this analysis is *very imcomplete*, it could not correctly
+ * handle cyclic callgraph.
+ **/
+
 #include "llvm/Pass.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Function.h"
@@ -11,14 +23,6 @@
 using namespace llvm;
 
 namespace ACT {
-    /**
-     * A context-sensitive, flow-insensitive point-to analysis,
-     * which will analyze pointers that are used in one
-     * function may point-to heap, stack locations, even the stack locations
-     * are not in this function's.
-     * It provides some kind of context-sensitive result. By the C2GMap, refer
-     * to below comments. For context-insensitive users, check `f2g`.
-     **/
     struct FlowtoAnalysis : public ModulePass {
         static char ID;
         // function and callsite of this function, return a point to graph
