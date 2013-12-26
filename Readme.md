@@ -155,8 +155,7 @@ flow-insensitive.
 So in VURD I implement a very *simple* point-to analysis, which is partly(but
 not fully, of course) context-sensitive, and insensitive of anything else. But a
 point-to analysis is still to hard. For keeping it *silly*, the point-to
-analysis in VURD currently can not handling cyclic call graph. It simply drops
-met function when analyzing.
+analysis in VURD currently implement IPA in a very simple summary approach.
 
 ### Lock Dominate Analysis
 Part of the race detection is to determine whether and which locks are hold
@@ -167,9 +166,9 @@ analysis.
 
 But again, for supporting multi-thread-programming pattern, like `work` function
 in the above example, This analysis need to be context-sensitive and also
-inter-procedure. And again, for a simpler life, VURD currently assume locks will
+inter-procedure. And again, for a simpler life, *VURD currently assume locks will
 be hold and release in the same function. i.e. the summary of any function is that
-it will do nothing to any locks.
+it will do nothing to any locks.*
 
 ## Limitation
 Currently, VURD could only analyze single source file and it always assume there

@@ -34,16 +34,23 @@ namespace ACT {
         C2GMap c2g;
         // This is a context-insensitive analysis result.
         std::map<Function*, PTGraph*> f2g;
-
+        // immedieate result
+        std::map<CallSite*, PTGraph*> csInput;
+        std::map<CallSite*, std::pair<PTGraph*, PTNode*>> csResult;
         // The above functions are implement details, refer to .cpp please.
         FlowtoAnalysis();
         virtual bool runOnModule(Module &M);
         virtual void releaseMemory();
         void getAnalysisUsage(AnalysisUsage &AU) const;
         PTGraph *graphForCallSite(const CallSite& CS) ;
-        PTNode *analyze(Function *func, PTGraph* flowinto, bool* added = NULL);
+        // Take callsite and graph as input, generate new graph in csResult
+        // and update csInput for called function.
+        /* PTNode *analyze(Function *func, PTGraph* flowinto, bool* added = NULL); */
+        bool analyze(CallSite *csp, PTGraph* flowinto); 
         void cleanupForFunc(Function *funcp, PTGraph *flowinto);
         bool runInstruction(PTGraph* graph, Instruction& inst);
+
+        Function* mainp;
     };
 };
 

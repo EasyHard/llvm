@@ -76,7 +76,7 @@ namespace ACT {
          * Merge another graph, which means adding nodes and edges that
          * exist in `mergeFrom` in the current graph.
          **/
-        void merge(PTGraph &mergeFrom);
+        bool merge(PTGraph &mergeFrom);
         /**
          * Add edge for from->to. `from` and `to` should be nodes in this graph
          * and return true if the edge is not existed before adding.

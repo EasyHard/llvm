@@ -4,12 +4,13 @@
 #include "llvm/Support/CallSite.h"
 #include <algorithm>
 namespace ACT {
-    void PTGraph::merge(PTGraph& from) {
+    bool PTGraph::merge(PTGraph& from) {
+        bool modified = false;
         // first, creating missed nodes
         for (auto theirnode : from.nodes) {
             Value *v = theirnode->getValue();
             if (!findValue(v, theirnode->isLocation())) {
-                addNode(v, theirnode->isLocation());
+                modified |= (addNode(v, theirnode->isLocation()) != NULL);
             }
         }
         // then we could add missing edges
@@ -19,9 +20,10 @@ namespace ACT {
             for (auto neiberhood : theirnode->next) {
                 //errs() << "mynode: " << *mynode << "\n";
                 //errs() << "neiberhood: " << *neiberhood << "\n";
-                addEdge(mynode, findValue(neiberhood->getValue(), neiberhood->isLocation()));
+                modified |= addEdge(mynode, findValue(neiberhood->getValue(), neiberhood->isLocation()));
             }
         }
+        return modified;
     }
 
     PTNode* PTGraph::findValue(Value *v, bool isLocation) {
@@ -132,13 +134,3 @@ namespace ACT {
         errs() << "after onlyTracking, size = " << nodes.size() << "\n";
     }
 };
-
-
-
-
-
-
-
-
-
-
