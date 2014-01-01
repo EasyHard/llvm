@@ -85,6 +85,7 @@ source like
         return 0;
     }
 
+Save the above as a .c source file, then generate its LLVM IR, by
 
     $ clang -c -emit-llvm -O1 -o example.bc example.c
 
